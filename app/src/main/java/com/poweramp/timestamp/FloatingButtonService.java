@@ -30,13 +30,11 @@ public class FloatingButtonService extends Service {
     private static boolean running = false;
     private WindowManager windowManager;
     private View floatingView;
-    private ImageButton btnTimestamp;
     private WindowManager.LayoutParams params;
     private Handler handler;
     private Runnable updateTrackInfoRunnable;
     
     private String currentFilename = "";
-    private long currentPosition = 0;
     
     private int initialX;
     private int initialY;
@@ -52,9 +50,7 @@ public class FloatingButtonService extends Service {
         super.onCreate();
         running = true;
 
-        // Create floating button
         floatingView = LayoutInflater.from(this).inflate(R.layout.floating_button, null);
-        btnTimestamp = floatingView.findViewById(R.id.btnTimestamp);
         
         int layoutType;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -63,11 +59,12 @@ public class FloatingButtonService extends Service {
             layoutType = WindowManager.LayoutParams.TYPE_PHONE;
         }
 
+        // CRITICAL: Remove FLAG_NOT_FOCUSABLE to allow touches!
         params = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 layoutType,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
                 PixelFormat.TRANSLUCENT
         );
 
@@ -77,10 +74,9 @@ public class FloatingButtonService extends Service {
 
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         
-        // Simple touch handler on the whole view
         floatingView.setOnTouchListener(new View.OnTouchListener() {
             @Override
-            public boolean onTouch(View view, MotionEvent event) {
+            public boolean onTouch(View v, MotionEvent event) {
                 switch (event.getAction()) {
                     case MotionEvent.ACTION_DOWN:
                         initialX = params.x;
@@ -90,11 +86,11 @@ public class FloatingButtonService extends Service {
                         return true;
 
                     case MotionEvent.ACTION_UP:
-                        int deltaX = (int) (event.getRawX() - initialTouchX);
-                        int deltaY = (int) (event.getRawY() - initialTouchY);
+                        float deltaX = event.getRawX() - initialTouchX;
+                        float deltaY = event.getRawY() - initialTouchY;
                         
-                        // If moved less than 10 pixels, it's a click
                         if (Math.abs(deltaX) < 10 && Math.abs(deltaY) < 10) {
+                            // It's a click!
                             saveTimestamp();
                         }
                         return true;
@@ -109,15 +105,12 @@ public class FloatingButtonService extends Service {
             }
         });
 
-        // Add the button
         try {
             windowManager.addView(floatingView, params);
         } catch (Exception e) {
-            e.printStackTrace();
             Toast.makeText(this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
 
-        // Update track info periodically
         handler = new Handler(Looper.getMainLooper());
         updateTrackInfoRunnable = new Runnable() {
             @Override
@@ -128,10 +121,9 @@ public class FloatingButtonService extends Service {
         };
         handler.post(updateTrackInfoRunnable);
 
-        // Start as foreground service
         startForeground(1, createNotification());
         
-        Toast.makeText(this, "Button active - Tap to save, drag to move", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "Button ready - Tap it to test!", Toast.LENGTH_LONG).show();
     }
 
     private Notification createNotification() {
@@ -148,7 +140,6 @@ public class FloatingButtonService extends Service {
     }
 
     private void updateCurrentTrackInfo() {
-        // Read from PowerAmp notification
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             try {
                 NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
@@ -177,20 +168,14 @@ public class FloatingButtonService extends Service {
     }
 
     private String cleanFilename(String filename) {
-        if (filename == null || filename.isEmpty()) {
-            return "unknown";
+        if (filename == null || filename.isEmpty() || filename.startsWith("content://")) {
+            return "";
         }
         
-        if (filename.startsWith("content://")) {
-            return "unknown";
-        }
-        
-        // Remove path
         if (filename.contains("/")) {
             filename = filename.substring(filename.lastIndexOf("/") + 1);
         }
         
-        // Remove extension
         if (filename.contains(".")) {
             int lastDot = filename.lastIndexOf(".");
             if (lastDot > 0) {
@@ -198,32 +183,24 @@ public class FloatingButtonService extends Service {
             }
         }
         
-        // Remove invalid characters
         filename = filename.replaceAll("[\\\\/:*?\"<>|]", "_");
-        filename = filename.trim();
-        
-        if (filename.isEmpty()) {
-            return "unknown";
-        }
-        
-        return filename;
+        return filename.trim();
     }
 
     private void saveTimestamp() {
-        // Force update track info
+        Toast.makeText(this, "BUTTON TAPPED!", Toast.LENGTH_SHORT).show();
+        
         updateCurrentTrackInfo();
         
-        // Show debug info
-        Toast.makeText(this, "Attempting to save...\nFilename: " + currentFilename, Toast.LENGTH_SHORT).show();
-        
-        if (currentFilename.isEmpty() || currentFilename.equals("unknown")) {
-            Toast.makeText(this, 
-                "No track detected\n\nMake sure PowerAmp notification is visible", 
-                Toast.LENGTH_LONG).show();
+        if (currentFilename.isEmpty()) {
+            Toast.makeText(this, "No track detected\nFilename is empty", Toast.LENGTH_LONG).show();
             return;
         }
 
-        String timestamp = formatTime(currentPosition);
+        Toast.makeText(this, "Detected: " + currentFilename, Toast.LENGTH_SHORT).show();
+        
+        // Get current timestamp (we'll use 00:00:00 for now since we don't have position)
+        String timestamp = "00:00:00";
         
         File dir = new File("/storage/emulated/0/_Edit-times");
         if (!dir.exists()) {
@@ -238,26 +215,17 @@ public class FloatingButtonService extends Service {
                 String content = currentFilename + "\n" + timestamp + "\n";
                 fos.write(content.getBytes());
                 fos.close();
-                Toast.makeText(this, "Created: " + currentFilename + ".txt\n" + timestamp, Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "✓ Created: " + currentFilename + ".txt", Toast.LENGTH_LONG).show();
             } else {
                 FileOutputStream fos = new FileOutputStream(file, true);
                 String content = timestamp + "\n";
                 fos.write(content.getBytes());
                 fos.close();
-                Toast.makeText(this, "Saved: " + timestamp, Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "✓ Saved: " + timestamp, Toast.LENGTH_SHORT).show();
             }
         } catch (IOException e) {
-            Toast.makeText(this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
-            e.printStackTrace();
+            Toast.makeText(this, "ERROR: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
-    }
-
-    private String formatTime(long milliseconds) {
-        long seconds = milliseconds / 1000;
-        long hours = seconds / 3600;
-        long minutes = (seconds % 3600) / 60;
-        long secs = seconds % 60;
-        return String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, secs);
     }
 
     @Override
@@ -265,7 +233,7 @@ public class FloatingButtonService extends Service {
         super.onDestroy();
         running = false;
         
-        if (handler != null && updateTrackInfoRunnable != null) {
+        if (handler != null) {
             handler.removeCallbacks(updateTrackInfoRunnable);
         }
         
@@ -276,8 +244,6 @@ public class FloatingButtonService extends Service {
                 e.printStackTrace();
             }
         }
-        
-        Toast.makeText(this, "Button removed", Toast.LENGTH_SHORT).show();
     }
 
     @Override
