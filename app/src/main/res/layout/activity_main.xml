@@ -20,28 +20,33 @@
         android:layout_height="wrap_content"
         android:text="Service is stopped"
         android:textSize="16sp"
-        android:layout_marginBottom="24dp" />
+        android:layout_marginBottom="24dp"
+        android:textAlignment="center"
+        android:gravity="center" />
 
     <Button
         android:id="@+id/btnStart"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Start Service"
-        android:layout_marginBottom="12dp" />
+        android:text="START SERVICE"
+        android:layout_marginBottom="12dp"
+        android:textStyle="bold" />
 
     <Button
         android:id="@+id/btnStop"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Stop Service" />
+        android:text="STOP SERVICE"
+        android:textStyle="bold" />
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Instructions:\n\n1. Grant all permissions\n2. Start the service\n3. Open PowerAmp and play a track\n4. Tap the floating button to save timestamps\n\nTimestamps are saved to:\n/sdcard/_Edit-times/"
+        android:text="Instructions:\n\n1. Grant all permissions\n2. Start the service\n3. Open PowerAmp and play a track\n4. Tap the floating button to save timestamps\n\nTimestamps are saved to:\n/storage/emulated/0/_Edit-times/\n\n• The button is ALWAYS visible when service is running\n• You can drag it anywhere on screen\n• Tap it to save current playback position"
         android:textSize="14sp"
         android:layout_marginTop="32dp"
         android:padding="12dp"
-        android:background="#F0F0F0" />
+        android:background="#F0F0F0"
+        android:lineSpacingExtra="2dp" />
 
 </LinearLayout>
