@@ -71,14 +71,12 @@ public class FloatingButtonService extends Service {
         
         ImageButton btnTimestamp = floatingView.findViewById(R.id.btnTimestamp);
         
-        // Handle button click
-        btnTimestamp.setOnClickListener(v -> saveTimestamp());
-        
-        // Handle dragging
+        // Handle dragging AND clicking
         floatingView.setOnTouchListener(new View.OnTouchListener() {
             private int initialX, initialY;
             private float initialTouchX, initialTouchY;
             private long touchStartTime;
+            private boolean isDragging = false;
 
             @Override
             public boolean onTouch(View v, MotionEvent event) {
@@ -89,15 +87,28 @@ public class FloatingButtonService extends Service {
                         initialTouchX = event.getRawX();
                         initialTouchY = event.getRawY();
                         touchStartTime = System.currentTimeMillis();
+                        isDragging = false;
                         return true;
+                        
                     case MotionEvent.ACTION_MOVE:
-                        params.x = initialX + (int) (initialTouchX - event.getRawX());
-                        params.y = initialY + (int) (event.getRawY() - initialTouchY);
-                        windowManager.updateViewLayout(floatingView, params);
+                        float deltaX = event.getRawX() - initialTouchX;
+                        float deltaY = event.getRawY() - initialTouchY;
+                        
+                        // If moved more than 10 pixels, it's a drag
+                        if (Math.abs(deltaX) > 10 || Math.abs(deltaY) > 10) {
+                            isDragging = true;
+                            params.x = initialX + (int) (initialTouchX - event.getRawX());
+                            params.y = initialY + (int) (event.getRawY() - initialTouchY);
+                            windowManager.updateViewLayout(floatingView, params);
+                        }
                         return true;
+                        
                     case MotionEvent.ACTION_UP:
-                        if (System.currentTimeMillis() - touchStartTime < 200) {
-                            v.performClick();
+                        long touchDuration = System.currentTimeMillis() - touchStartTime;
+                        
+                        // If touch was short and didn't drag, it's a click
+                        if (!isDragging && touchDuration < 300) {
+                            saveTimestamp();
                         }
                         return true;
                 }
@@ -127,7 +138,7 @@ public class FloatingButtonService extends Service {
         // Start as foreground service
         startForeground(1, createNotification());
         
-        Toast.makeText(this, "Floating button active - Drag to move", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "Floating button active\nTap to save, drag to move", Toast.LENGTH_LONG).show();
     }
 
     private Notification createNotification() {
@@ -144,22 +155,7 @@ public class FloatingButtonService extends Service {
     }
 
     private void updateCurrentTrackInfo() {
-        // First try to get from shared preferences (from PowerAmpReceiver)
-        try {
-            android.content.SharedPreferences prefs = getSharedPreferences("poweramp_data", Context.MODE_PRIVATE);
-            String filename = prefs.getString("current_file", "");
-            long position = prefs.getLong("current_position", 0);
-            
-            if (!filename.isEmpty()) {
-                currentFilename = cleanFilename(filename);
-                currentPosition = position;
-                return;
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        
-        // Fallback: Try to get info from PowerAmp notification
+        // Try to get info from PowerAmp notification (this works with "Open with")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             try {
                 NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
@@ -169,10 +165,24 @@ public class FloatingButtonService extends Service {
                     if (sbn.getPackageName().equals("com.maxmpz.audioplayer")) {
                         Notification notification = sbn.getNotification();
                         if (notification.extras != null) {
+                            // Try EXTRA_TITLE first (this should have the filename)
                             String title = notification.extras.getString(Notification.EXTRA_TITLE, "");
                             
-                            if (!title.isEmpty()) {
-                                currentFilename = cleanFilename(title);
+                            // If title is empty or looks like a content URI, try EXTRA_TEXT
+                            if (title.isEmpty() || title.startsWith("content://")) {
+                                title = notification.extras.getString(Notification.EXTRA_TEXT, "");
+                            }
+                            
+                            // Try subtext as another fallback
+                            if (title.isEmpty() || title.startsWith("content://")) {
+                                title = notification.extras.getString(Notification.EXTRA_SUB_TEXT, "");
+                            }
+                            
+                            if (!title.isEmpty() && !title.startsWith("content://")) {
+                                String cleanedFilename = cleanFilename(title);
+                                if (!cleanedFilename.equals("unknown")) {
+                                    currentFilename = cleanedFilename;
+                                }
                             }
                         }
                     }
@@ -181,10 +191,35 @@ public class FloatingButtonService extends Service {
                 e.printStackTrace();
             }
         }
+        
+        // Also try shared preferences (from PowerAmpReceiver broadcasts)
+        try {
+            android.content.SharedPreferences prefs = getSharedPreferences("poweramp_data", Context.MODE_PRIVATE);
+            String filename = prefs.getString("current_file", "");
+            long position = prefs.getLong("current_position", 0);
+            
+            if (!filename.isEmpty() && !filename.startsWith("content://")) {
+                String cleanedFilename = cleanFilename(filename);
+                if (!cleanedFilename.equals("unknown")) {
+                    currentFilename = cleanedFilename;
+                }
+            }
+            
+            if (position > 0) {
+                currentPosition = position;
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     private String cleanFilename(String filename) {
         if (filename == null || filename.isEmpty()) {
+            return "unknown";
+        }
+        
+        // Skip content URIs
+        if (filename.startsWith("content://")) {
             return "unknown";
         }
         
@@ -204,8 +239,8 @@ public class FloatingButtonService extends Service {
             }
         }
         
-        // Remove invalid characters
-        filename = filename.replaceAll("[^a-zA-Z0-9._\\-\\s]", "_");
+        // Remove invalid characters but keep more characters
+        filename = filename.replaceAll("[\\\\/:*?\"<>|]", "_");
         filename = filename.trim();
         
         if (filename.isEmpty()) {
@@ -220,7 +255,9 @@ public class FloatingButtonService extends Service {
         updateCurrentTrackInfo();
         
         if (currentFilename.isEmpty() || currentFilename.equals("unknown")) {
-            Toast.makeText(this, "No track detected\n\nPlay something in PowerAmp first!", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, 
+                "❌ No track detected\n\nMake sure PowerAmp is playing and the track name is visible in the notification", 
+                Toast.LENGTH_LONG).show();
             return;
         }
 
@@ -231,7 +268,7 @@ public class FloatingButtonService extends Service {
         if (!dir.exists()) {
             boolean created = dir.mkdirs();
             if (!created) {
-                Toast.makeText(this, "ERROR: Could not create folder\n/storage/emulated/0/_Edit-times", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "❌ Could not create folder\n/storage/emulated/0/_Edit-times", Toast.LENGTH_LONG).show();
                 return;
             }
         }
@@ -245,17 +282,17 @@ public class FloatingButtonService extends Service {
                 String content = currentFilename + "\n" + timestamp + "\n";
                 fos.write(content.getBytes());
                 fos.close();
-                Toast.makeText(this, "✓ Created: " + currentFilename + ".txt\n" + timestamp, Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "✓ Created file:\n" + currentFilename + ".txt\n\nSaved: " + timestamp, Toast.LENGTH_SHORT).show();
             } else {
                 // Append timestamp
                 FileOutputStream fos = new FileOutputStream(file, true);
                 String content = timestamp + "\n";
                 fos.write(content.getBytes());
                 fos.close();
-                Toast.makeText(this, "✓ Saved: " + timestamp, Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "✓ Saved: " + timestamp + "\n→ " + currentFilename + ".txt", Toast.LENGTH_SHORT).show();
             }
         } catch (IOException e) {
-            Toast.makeText(this, "ERROR: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "❌ Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
             e.printStackTrace();
         }
     }
