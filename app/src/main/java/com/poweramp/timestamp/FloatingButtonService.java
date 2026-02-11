@@ -14,6 +14,7 @@ import android.os.Looper;
 import android.service.notification.StatusBarNotification;
 import android.view.Gravity;
 import android.view.LayoutInflater;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.ImageButton;
@@ -27,9 +28,13 @@ public class FloatingButtonService extends Service {
     private static boolean running = false;
     private WindowManager windowManager;
     private View floatingView;
+    private WindowManager.LayoutParams params;
     private Handler handler;
     private Runnable updateTrackInfoRunnable;
     private String currentFilename = "";
+    
+    private int initialX, initialY;
+    private float initialTouchX, initialTouchY;
 
     public static boolean isRunning() {
         return running;
@@ -47,11 +52,12 @@ public class FloatingButtonService extends Service {
             ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY 
             : WindowManager.LayoutParams.TYPE_PHONE;
 
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+        // CORRECT FLAGS: Allows clicks but passes through touches outside the button
+        params = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 layoutType,
-                0, // NO FLAGS - just to test
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
                 PixelFormat.TRANSLUCENT
         );
 
@@ -61,18 +67,50 @@ public class FloatingButtonService extends Service {
 
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         
-        // ONLY click listener - NO dragging for now
+        // Click listener
         btnTimestamp.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                Toast.makeText(FloatingButtonService.this, "🎯 BUTTON WORKS!", Toast.LENGTH_LONG).show();
+                Toast.makeText(FloatingButtonService.this, "Saving...", Toast.LENGTH_SHORT).show();
                 saveTimestamp();
+            }
+        });
+        
+        // Touch listener for dragging
+        btnTimestamp.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        initialX = params.x;
+                        initialY = params.y;
+                        initialTouchX = event.getRawX();
+                        initialTouchY = event.getRawY();
+                        return false; // Let onClick also work
+
+                    case MotionEvent.ACTION_MOVE:
+                        float deltaX = Math.abs(event.getRawX() - initialTouchX);
+                        float deltaY = Math.abs(event.getRawY() - initialTouchY);
+                        
+                        if (deltaX > 30 || deltaY > 30) {
+                            // User is dragging
+                            params.x = initialX + (int) (initialTouchX - event.getRawX());
+                            params.y = initialY + (int) (event.getRawY() - initialTouchY);
+                            windowManager.updateViewLayout(floatingView, params);
+                            return true; // Consume event
+                        }
+                        return false;
+
+                    case MotionEvent.ACTION_UP:
+                        return false; // Let onClick handle
+                }
+                return false;
             }
         });
 
         windowManager.addView(floatingView, params);
         
-        // Update track info
+        // Update track info periodically
         handler = new Handler(Looper.getMainLooper());
         updateTrackInfoRunnable = new Runnable() {
             @Override
@@ -84,15 +122,15 @@ public class FloatingButtonService extends Service {
         handler.post(updateTrackInfoRunnable);
 
         startForeground(1, createNotification());
-        Toast.makeText(this, "TEST VERSION - Button should be clickable now!", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "Button active - tap to save timestamp", Toast.LENGTH_LONG).show();
     }
 
     private Notification createNotification() {
         Intent notificationIntent = new Intent(this, MainActivity.class);
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE);
         return new NotificationCompat.Builder(this, "poweramp_timestamp_channel")
-                .setContentTitle("PowerAmp Timestamp TEST")
-                .setContentText("Testing button click")
+                .setContentTitle("PowerAmp Timestamp")
+                .setContentText("Button active")
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentIntent(pendingIntent)
                 .build();
@@ -109,13 +147,20 @@ public class FloatingButtonService extends Service {
                         Notification notification = sbn.getNotification();
                         if (notification.extras != null) {
                             String title = notification.extras.getString(Notification.EXTRA_TITLE, "");
+                            
+                            if (title.isEmpty() || title.startsWith("content://")) {
+                                title = notification.extras.getString(Notification.EXTRA_TEXT, "");
+                            }
+                            
                             if (!title.isEmpty() && !title.startsWith("content://")) {
                                 currentFilename = cleanFilename(title);
                             }
                         }
                     }
                 }
-            } catch (Exception e) {}
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
         }
     }
 
@@ -127,28 +172,35 @@ public class FloatingButtonService extends Service {
     }
 
     private void saveTimestamp() {
+        updateCurrentTrackInfo();
+        
         if (currentFilename.isEmpty()) {
-            Toast.makeText(this, "❌ No filename detected", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "No track detected\n\nOpen PowerAmp and play something", Toast.LENGTH_LONG).show();
             return;
         }
 
-        Toast.makeText(this, "📝 Filename: " + currentFilename, Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "File: " + currentFilename, Toast.LENGTH_SHORT).show();
+        
+        String timestamp = "00:00:00"; // We'll fix position later
         
         File dir = new File("/storage/emulated/0/_Edit-times");
         dir.mkdirs();
         File file = new File(dir, currentFilename + ".txt");
         
         try {
-            FileOutputStream fos = new FileOutputStream(file, !file.exists());
             if (!file.exists()) {
-                fos.write((currentFilename + "\n00:00:00\n").getBytes());
+                FileOutputStream fos = new FileOutputStream(file);
+                fos.write((currentFilename + "\n" + timestamp + "\n").getBytes());
+                fos.close();
+                Toast.makeText(this, "✓ Created: " + currentFilename + ".txt", Toast.LENGTH_SHORT).show();
             } else {
-                fos.write("00:00:00\n".getBytes());
+                FileOutputStream fos = new FileOutputStream(file, true);
+                fos.write((timestamp + "\n").getBytes());
+                fos.close();
+                Toast.makeText(this, "✓ Saved: " + timestamp, Toast.LENGTH_SHORT).show();
             }
-            fos.close();
-            Toast.makeText(this, "✅ SAVED!", Toast.LENGTH_LONG).show();
         } catch (Exception e) {
-            Toast.makeText(this, "❌ Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
@@ -166,4 +218,4 @@ public class FloatingButtonService extends Service {
     public IBinder onBind(Intent intent) {
         return null;
     }
-}
+    }
