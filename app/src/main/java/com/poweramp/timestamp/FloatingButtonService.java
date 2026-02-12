@@ -8,6 +8,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.PixelFormat;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -29,6 +30,7 @@ public class FloatingButtonService extends Service {
     private View floatingView;
     private Handler handler;
     private String currentFilename = "";
+    private String debugInfo = "No PowerAmp notification found";
 
     public static boolean isRunning() {
         return running;
@@ -60,12 +62,20 @@ public class FloatingButtonService extends Service {
 
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         
-        // ONLY CLICK - NO DRAGGING
+        // ONLY CLICK
         btnTimestamp.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 Toast.makeText(FloatingButtonService.this, "🔘 Button clicked!", Toast.LENGTH_SHORT).show();
-                saveTimestamp();
+                
+                // Show debug info
+                new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        updateCurrentTrackInfo();
+                        Toast.makeText(FloatingButtonService.this, debugInfo, Toast.LENGTH_LONG).show();
+                    }
+                }, 500);
             }
         });
 
@@ -83,15 +93,15 @@ public class FloatingButtonService extends Service {
         handler.post(updateTask);
 
         startForeground(1, createNotification());
-        Toast.makeText(this, "✓ Button ready - just tap it!", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "✓ Button ready - tap to see notification data!", Toast.LENGTH_LONG).show();
     }
 
     private Notification createNotification() {
         Intent intent = new Intent(this, MainActivity.class);
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE);
         return new NotificationCompat.Builder(this, "poweramp_timestamp_channel")
-                .setContentTitle("PowerAmp Timestamp")
-                .setContentText("Tap to save")
+                .setContentTitle("PowerAmp Timestamp DEBUG")
+                .setContentText("Tap to see notification fields")
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentIntent(pendingIntent)
                 .build();
@@ -107,11 +117,24 @@ public class FloatingButtonService extends Service {
                     if (sbn.getPackageName().equals("com.maxmpz.audioplayer")) {
                         Notification n = sbn.getNotification();
                         if (n.extras != null) {
-                            String title = n.extras.getString(Notification.EXTRA_TITLE, "");
-                            String text = n.extras.getString(Notification.EXTRA_TEXT, "");
-                            String subText = n.extras.getString(Notification.EXTRA_SUB_TEXT, "");
+                            Bundle extras = n.extras;
                             
-                            // Find first non-empty, non-content URI
+                            // Get ALL possible fields
+                            String title = extras.getString(Notification.EXTRA_TITLE, "");
+                            String text = extras.getString(Notification.EXTRA_TEXT, "");
+                            String subText = extras.getString(Notification.EXTRA_SUB_TEXT, "");
+                            String infoText = extras.getString(Notification.EXTRA_INFO_TEXT, "");
+                            String summaryText = extras.getString(Notification.EXTRA_SUMMARY_TEXT, "");
+                            
+                            // Build debug string
+                            debugInfo = "POWERAMP NOTIFICATION:\n\n";
+                            debugInfo += "TITLE: " + (title.isEmpty() ? "(empty)" : title) + "\n\n";
+                            debugInfo += "TEXT: " + (text.isEmpty() ? "(empty)" : text) + "\n\n";
+                            debugInfo += "SUB_TEXT: " + (subText.isEmpty() ? "(empty)" : subText) + "\n\n";
+                            debugInfo += "INFO_TEXT: " + (infoText.isEmpty() ? "(empty)" : infoText) + "\n\n";
+                            debugInfo += "SUMMARY: " + (summaryText.isEmpty() ? "(empty)" : summaryText);
+                            
+                            // Try to find filename
                             String found = "";
                             if (!title.isEmpty() && !title.startsWith("content://")) found = title;
                             else if (!text.isEmpty() && !text.startsWith("content://")) found = text;
@@ -120,10 +143,16 @@ public class FloatingButtonService extends Service {
                             if (!found.isEmpty()) {
                                 currentFilename = cleanFilename(found);
                             }
+                            
+                            return;
                         }
                     }
                 }
+                
+                debugInfo = "No PowerAmp notification found!\n\nMake sure PowerAmp is playing.";
+                
             } catch (Exception e) {
+                debugInfo = "ERROR: " + e.getMessage();
                 e.printStackTrace();
             }
         }
@@ -134,39 +163,6 @@ public class FloatingButtonService extends Service {
         if (filename.contains("/")) filename = filename.substring(filename.lastIndexOf("/") + 1);
         if (filename.contains(".")) filename = filename.substring(0, filename.lastIndexOf("."));
         return filename.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
-    }
-
-    private void saveTimestamp() {
-        updateCurrentTrackInfo(); // Force check
-        
-        if (currentFilename.isEmpty()) {
-            Toast.makeText(this, "❌ No track detected\n\nMake sure PowerAmp is playing", Toast.LENGTH_LONG).show();
-            return;
-        }
-
-        Toast.makeText(this, "📝 File: " + currentFilename, Toast.LENGTH_SHORT).show();
-        
-        File dir = new File("/storage/emulated/0/_Edit-times");
-        dir.mkdirs();
-        File file = new File(dir, currentFilename + ".txt");
-        
-        try {
-            String timestamp = "00:00:00";
-            
-            if (!file.exists()) {
-                FileOutputStream fos = new FileOutputStream(file);
-                fos.write((currentFilename + "\n" + timestamp + "\n").getBytes());
-                fos.close();
-                Toast.makeText(this, "✅ Created: " + currentFilename + ".txt", Toast.LENGTH_LONG).show();
-            } else {
-                FileOutputStream fos = new FileOutputStream(file, true);
-                fos.write((timestamp + "\n").getBytes());
-                fos.close();
-                Toast.makeText(this, "✅ Saved: " + timestamp, Toast.LENGTH_SHORT).show();
-            }
-        } catch (Exception e) {
-            Toast.makeText(this, "❌ Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
-        }
     }
 
     @Override
@@ -183,4 +179,4 @@ public class FloatingButtonService extends Service {
     public IBinder onBind(Intent intent) {
         return null;
     }
-            }
+}
