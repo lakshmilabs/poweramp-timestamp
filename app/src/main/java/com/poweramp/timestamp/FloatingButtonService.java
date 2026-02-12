@@ -3,7 +3,6 @@ package com.poweramp.timestamp;
 import android.app.Notification;
 import android.app.PendingIntent;
 import android.app.Service;
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -22,6 +21,7 @@ import android.widget.Toast;
 import androidx.core.app.NotificationCompat;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.util.Locale;
 
 public class FloatingButtonService extends Service {
 
@@ -65,10 +65,9 @@ public class FloatingButtonService extends Service {
             public void onClick(View v) {
                 if (!isNotificationAccessGranted()) {
                     Toast.makeText(FloatingButtonService.this, 
-                        "⚠️ Notification Access needed!\n\nGo to:\nSettings → Notification access\n\nEnable 'PowerAmp Timestamp'", 
+                        "⚠️ Notification Access needed!\n\nOpening settings...", 
                         Toast.LENGTH_LONG).show();
                     
-                    // Open settings
                     new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
                         @Override
                         public void run() {
@@ -76,7 +75,7 @@ public class FloatingButtonService extends Service {
                             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                             startActivity(intent);
                         }
-                    }, 2000);
+                    }, 1500);
                     return;
                 }
                 
@@ -90,7 +89,7 @@ public class FloatingButtonService extends Service {
         if (!isNotificationAccessGranted()) {
             Toast.makeText(this, "⚠️ Tap button to enable Notification Access", Toast.LENGTH_LONG).show();
         } else {
-            Toast.makeText(this, "✓ Button ready!", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "✓ Ready! Tap to save timestamps", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -115,14 +114,15 @@ public class FloatingButtonService extends Service {
     }
 
     private void saveTimestamp() {
-        // Read from SharedPreferences (set by PowerAmpNotificationListener)
         SharedPreferences prefs = getSharedPreferences("poweramp_data", Context.MODE_PRIVATE);
+        
+        // Get filename from notification listener
         String title = prefs.getString("notification_title", "");
         String text = prefs.getString("notification_text", "");
         String subText = prefs.getString("notification_subtext", "");
         
-        String debugInfo = "TITLE: " + title + "\nTEXT: " + text + "\nSUBTEXT: " + subText;
-        Toast.makeText(this, debugInfo, Toast.LENGTH_LONG).show();
+        // Get playback position from broadcast receiver
+        long position = prefs.getLong("playback_position", 0);
         
         // Find filename
         String found = "";
@@ -131,55 +131,33 @@ public class FloatingButtonService extends Service {
         else if (!subText.isEmpty() && !subText.startsWith("content://")) found = subText;
         
         if (found.isEmpty()) {
-            new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    Toast.makeText(FloatingButtonService.this, "❌ No track detected", Toast.LENGTH_SHORT).show();
-                }
-            }, 2000);
+            Toast.makeText(this, "❌ No track detected", Toast.LENGTH_SHORT).show();
             return;
         }
         
         currentFilename = cleanFilename(found);
+        String timestamp = formatTime(position);
+        
+        Toast.makeText(this, "💾 Saving: " + timestamp, Toast.LENGTH_SHORT).show();
         
         File dir = new File("/storage/emulated/0/_Edit-times");
         dir.mkdirs();
         File file = new File(dir, currentFilename + ".txt");
         
         try {
-            String timestamp = "00:00:00";
-            
             if (!file.exists()) {
                 FileOutputStream fos = new FileOutputStream(file);
                 fos.write((currentFilename + "\n" + timestamp + "\n").getBytes());
                 fos.close();
-                
-                new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        Toast.makeText(FloatingButtonService.this, "✅ Created: " + currentFilename + ".txt", Toast.LENGTH_SHORT).show();
-                    }
-                }, 2000);
+                Toast.makeText(this, "✅ Created file!", Toast.LENGTH_SHORT).show();
             } else {
                 FileOutputStream fos = new FileOutputStream(file, true);
                 fos.write((timestamp + "\n").getBytes());
                 fos.close();
-                
-                new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        Toast.makeText(FloatingButtonService.this, "✅ Saved: " + timestamp, Toast.LENGTH_SHORT).show();
-                    }
-                }, 2000);
+                Toast.makeText(this, "✅ Saved: " + timestamp, Toast.LENGTH_SHORT).show();
             }
         } catch (Exception e) {
-            final String error = e.getMessage();
-            new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    Toast.makeText(FloatingButtonService.this, "❌ Error: " + error, Toast.LENGTH_LONG).show();
-                }
-            }, 2000);
+            Toast.makeText(this, "❌ Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
@@ -188,6 +166,14 @@ public class FloatingButtonService extends Service {
         if (filename.contains("/")) filename = filename.substring(filename.lastIndexOf("/") + 1);
         if (filename.contains(".")) filename = filename.substring(0, filename.lastIndexOf("."));
         return filename.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+    }
+
+    private String formatTime(long milliseconds) {
+        long seconds = milliseconds / 1000;
+        long hours = seconds / 3600;
+        long minutes = (seconds % 3600) / 60;
+        long secs = seconds % 60;
+        return String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, secs);
     }
 
     @Override
@@ -203,4 +189,4 @@ public class FloatingButtonService extends Service {
     public IBinder onBind(Intent intent) {
         return null;
     }
-                }
+            }
