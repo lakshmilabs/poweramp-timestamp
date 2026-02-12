@@ -44,6 +44,17 @@
             </intent-filter>
         </service>
 
+        <receiver
+            android:name=".PowerAmpReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.maxmpz.audioplayer.STATUS_CHANGED" />
+                <action android:name="com.maxmpz.audioplayer.PLAYING_MODE_CHANGED" />
+                <action android:name="com.maxmpz.audioplayer.TRACK_CHANGED" />
+            </intent-filter>
+        </receiver>
+
     </application>
 
 </manifest>
