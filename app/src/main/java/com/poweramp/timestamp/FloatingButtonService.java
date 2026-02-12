@@ -3,15 +3,19 @@ package com.poweramp.timestamp;
 import android.app.Notification;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.graphics.PixelFormat;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.provider.Settings;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -25,19 +29,100 @@ import java.util.Locale;
 
 public class FloatingButtonService extends Service {
 
+    private static final String TAG = "FloatingButtonService";
     private static boolean running = false;
     private WindowManager windowManager;
     private View floatingView;
     private String currentFilename = "";
+    private PowerAmpBroadcastReceiver powerAmpReceiver;
 
     public static boolean isRunning() {
         return running;
+    }
+
+    // Inner class for receiving PowerAmp broadcasts
+    private class PowerAmpBroadcastReceiver extends BroadcastReceiver {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            if (action == null) return;
+
+            Log.d(TAG, "📻 Received broadcast: " + action);
+            
+            Bundle extras = intent.getExtras();
+            if (extras != null) {
+                // Log all extras for debugging
+                for (String key : extras.keySet()) {
+                    Object value = extras.get(key);
+                    Log.d(TAG, "  Extra: " + key + " = " + value + " (type: " + (value != null ? value.getClass().getSimpleName() : "null") + ")");
+                }
+                
+                // Get playback position - PowerAmp sends it in MILLISECONDS
+                // Try different possible keys
+                long position = -1;
+                
+                if (extras.containsKey("pos")) {
+                    position = extras.getInt("pos", -1);
+                    Log.d(TAG, "✓ Got position from 'pos': " + position + " ms");
+                }
+                
+                if (position < 0 && extras.containsKey("position")) {
+                    position = extras.getInt("position", -1);
+                    Log.d(TAG, "✓ Got position from 'position': " + position + " ms");
+                }
+                
+                // Get track info
+                String track = extras.getString("track", "");
+                String path = extras.getString("path", "");
+                
+                if (!track.isEmpty()) Log.d(TAG, "✓ Track: " + track);
+                if (!path.isEmpty()) Log.d(TAG, "✓ Path: " + path);
+                
+                // Save to SharedPreferences
+                SharedPreferences prefs = context.getSharedPreferences("poweramp_data", Context.MODE_PRIVATE);
+                SharedPreferences.Editor editor = prefs.edit();
+                
+                if (position >= 0) {
+                    editor.putLong("playback_position", position);
+                    editor.putLong("last_position_update", System.currentTimeMillis());
+                    Log.d(TAG, "💾 Saved position: " + position + " ms (" + formatTime(position) + ")");
+                }
+                
+                if (!track.isEmpty()) {
+                    editor.putString("broadcast_track", track);
+                }
+                
+                if (!path.isEmpty()) {
+                    editor.putString("broadcast_path", path);
+                }
+                
+                editor.putLong("last_broadcast_time", System.currentTimeMillis());
+                editor.apply();
+            } else {
+                Log.w(TAG, "⚠️ Broadcast has no extras!");
+            }
+        }
     }
 
     @Override
     public void onCreate() {
         super.onCreate();
         running = true;
+        Log.d(TAG, "🚀 Service created");
+
+        // Register PowerAmp broadcast receiver DYNAMICALLY
+        powerAmpReceiver = new PowerAmpBroadcastReceiver();
+        IntentFilter filter = new IntentFilter();
+        filter.addAction("com.maxmpz.audioplayer.STATUS_CHANGED");
+        filter.addAction("com.maxmpz.audioplayer.PLAYING_MODE_CHANGED");
+        filter.addAction("com.maxmpz.audioplayer.TRACK_CHANGED");
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(powerAmpReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(powerAmpReceiver, filter);
+        }
+        Log.d(TAG, "✓ Registered PowerAmp broadcast receiver");
 
         floatingView = LayoutInflater.from(this).inflate(R.layout.floating_button, null);
         ImageButton btnTimestamp = floatingView.findViewById(R.id.btnTimestamp);
@@ -63,6 +148,8 @@ public class FloatingButtonService extends Service {
         btnTimestamp.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                Log.d(TAG, "🖱️ Button clicked!");
+                
                 if (!isNotificationAccessGranted()) {
                     Toast.makeText(FloatingButtonService.this, 
                         "⚠️ Notification Access needed!\n\nOpening settings...", 
@@ -123,6 +210,16 @@ public class FloatingButtonService extends Service {
         
         // Get playback position from broadcast receiver
         long position = prefs.getLong("playback_position", 0);
+        long lastUpdate = prefs.getLong("last_position_update", 0);
+        long lastBroadcast = prefs.getLong("last_broadcast_time", 0);
+        
+        Log.d(TAG, "📊 DEBUG INFO:");
+        Log.d(TAG, "  Title: " + title);
+        Log.d(TAG, "  Text: " + text);
+        Log.d(TAG, "  SubText: " + subText);
+        Log.d(TAG, "  Position: " + position + " ms");
+        Log.d(TAG, "  Last position update: " + (System.currentTimeMillis() - lastUpdate) + " ms ago");
+        Log.d(TAG, "  Last broadcast: " + (System.currentTimeMillis() - lastBroadcast) + " ms ago");
         
         // Find filename
         String found = "";
@@ -131,13 +228,24 @@ public class FloatingButtonService extends Service {
         else if (!subText.isEmpty() && !subText.startsWith("content://")) found = subText;
         
         if (found.isEmpty()) {
+            // Try broadcast track info
+            String broadcastTrack = prefs.getString("broadcast_track", "");
+            String broadcastPath = prefs.getString("broadcast_path", "");
+            
+            if (!broadcastTrack.isEmpty()) found = broadcastTrack;
+            else if (!broadcastPath.isEmpty()) found = broadcastPath;
+        }
+        
+        if (found.isEmpty()) {
             Toast.makeText(this, "❌ No track detected", Toast.LENGTH_SHORT).show();
+            Log.e(TAG, "❌ No track found!");
             return;
         }
         
         currentFilename = cleanFilename(found);
         String timestamp = formatTime(position);
         
+        Log.d(TAG, "💾 Saving timestamp: " + timestamp + " to file: " + currentFilename + ".txt");
         Toast.makeText(this, "💾 Saving: " + timestamp, Toast.LENGTH_SHORT).show();
         
         File dir = new File("/storage/emulated/0/_Edit-times");
@@ -150,14 +258,17 @@ public class FloatingButtonService extends Service {
                 fos.write((currentFilename + "\n" + timestamp + "\n").getBytes());
                 fos.close();
                 Toast.makeText(this, "✅ Created file!", Toast.LENGTH_SHORT).show();
+                Log.d(TAG, "✅ Created new file: " + file.getAbsolutePath());
             } else {
                 FileOutputStream fos = new FileOutputStream(file, true);
                 fos.write((timestamp + "\n").getBytes());
                 fos.close();
                 Toast.makeText(this, "✅ Saved: " + timestamp, Toast.LENGTH_SHORT).show();
+                Log.d(TAG, "✅ Appended to file: " + file.getAbsolutePath());
             }
         } catch (Exception e) {
             Toast.makeText(this, "❌ Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            Log.e(TAG, "❌ Error saving file", e);
         }
     }
 
@@ -180,8 +291,24 @@ public class FloatingButtonService extends Service {
     public void onDestroy() {
         super.onDestroy();
         running = false;
+        
+        // Unregister the broadcast receiver
+        if (powerAmpReceiver != null) {
+            try {
+                unregisterReceiver(powerAmpReceiver);
+                Log.d(TAG, "✓ Unregistered PowerAmp receiver");
+            } catch (Exception e) {
+                Log.e(TAG, "Error unregistering receiver", e);
+            }
+        }
+        
         if (floatingView != null) {
-            try { windowManager.removeView(floatingView); } catch (Exception e) {}
+            try { 
+                windowManager.removeView(floatingView); 
+                Log.d(TAG, "✓ Removed floating view");
+            } catch (Exception e) {
+                Log.e(TAG, "Error removing view", e);
+            }
         }
     }
 
@@ -189,4 +316,5 @@ public class FloatingButtonService extends Service {
     public IBinder onBind(Intent intent) {
         return null;
     }
-            }
+                                                             }
+                
