@@ -67,7 +67,17 @@ public class FloatingButtonService extends Service {
                     Log.d(TAG, "✓ Position: " + positionSeconds + "s = " + positionMs + "ms = " + formatTime(positionMs));
                 }
                 
-                String track = extras.getString("track", "");
+                String track = "";
+                if (extras.containsKey("track")) {
+                    Object trackObj = extras.get("track");
+                    if (trackObj instanceof String) {
+                        track = (String) trackObj;
+                    } else if (trackObj instanceof Bundle) {
+                        Bundle trackBundle = (Bundle) trackObj;
+                        track = trackBundle.getString("title", "");
+                    }
+                }
+                
                 String path = extras.getString("path", "");
                 
                 SharedPreferences prefs = context.getSharedPreferences("poweramp_data", Context.MODE_PRIVATE);
@@ -123,7 +133,7 @@ public class FloatingButtonService extends Service {
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 layoutType,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                 PixelFormat.TRANSLUCENT
         );
 
@@ -200,7 +210,7 @@ public class FloatingButtonService extends Service {
         Log.d(TAG, "📡 Requested position sync via broadcast to receiver");
         
         // Wait for update with timeout
-        long timeout = requestTime + 3000; // 3 seconds max wait
+        long timeout = requestTime + 4000; // Increased to 4 seconds
         boolean updated = false;
         while (System.currentTimeMillis() < timeout) {
             long lastUpdate = prefs.getLong("last_position_update", 0);
