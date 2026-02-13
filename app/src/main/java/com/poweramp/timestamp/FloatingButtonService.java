@@ -8,7 +8,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
-import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.os.Build;
 import android.os.Bundle;
@@ -16,14 +15,12 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.provider.Settings;
-import android.util.TypedValue;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.ImageButton;
-import android.widget.LinearLayout;
-import android.widget.TextView;
 import android.widget.Toast;
 import androidx.core.app.NotificationCompat;
 import java.io.File;
@@ -36,12 +33,9 @@ public class FloatingButtonService extends Service {
     private static boolean running = false;
     private WindowManager windowManager;
     private View floatingView;
-    private TextView debugTextView;
     private String currentFilename = "";
     private PowerAmpBroadcastReceiver powerAmpReceiver;
     private Handler handler = new Handler(Looper.getMainLooper());
-    private StringBuilder debugInfo = new StringBuilder();
-    private int broadcastCount = 0;
 
     public static boolean isRunning() {
         return running;
@@ -53,69 +47,43 @@ public class FloatingButtonService extends Service {
             String action = intent.getAction();
             if (action == null) return;
 
-            broadcastCount++;
+            Log.d(TAG, "📻 Received broadcast: " + action);
             
             Bundle extras = intent.getExtras();
-            if (extras == null) {
-                updateDebugText("❌ Broadcast #" + broadcastCount + " - NO EXTRAS!");
-                return;
-            }
-
-            // Collect all extras
-            StringBuilder extrasText = new StringBuilder();
-            extrasText.append("📻 Broadcast #").append(broadcastCount).append("\n");
-            extrasText.append("Action: ").append(action.substring(action.lastIndexOf(".") + 1)).append("\n\n");
-            extrasText.append("ALL FIELDS:\n");
-            
-            long position = -1;
-            String posField = "NONE";
-            
-            for (String key : extras.keySet()) {
-                Object value = extras.get(key);
-                String type = value != null ? value.getClass().getSimpleName() : "null";
-                extrasText.append("• ").append(key).append(" = ").append(value).append(" (").append(type).append(")\n");
+            if (extras != null) {
+                // ONLY CHANGE: PowerAmp sends position in SECONDS, convert to MILLISECONDS
+                int positionSeconds = extras.getInt("pos", -1);
+                long positionMs = -1;
                 
-                // Try to find position
-                if (value instanceof Integer || value instanceof Long) {
-                    long val = value instanceof Integer ? ((Integer)value).longValue() : (Long)value;
-                    if (key.toLowerCase().contains("pos") || 
-                        key.toLowerCase().contains("time") || 
-                        key.toLowerCase().contains("elapsed")) {
-                        if (val > position) {
-                            position = val;
-                            posField = key;
-                        }
-                    }
+                if (positionSeconds >= 0) {
+                    positionMs = positionSeconds * 1000L;  // Convert seconds to milliseconds
+                    Log.d(TAG, "✓ Position: " + positionSeconds + "s = " + positionMs + "ms = " + formatTime(positionMs));
                 }
+                
+                // Get track info
+                String track = extras.getString("track", "");
+                String path = extras.getString("path", "");
+                
+                // Save to SharedPreferences
+                SharedPreferences prefs = context.getSharedPreferences("poweramp_data", Context.MODE_PRIVATE);
+                SharedPreferences.Editor editor = prefs.edit();
+                
+                if (positionMs >= 0) {
+                    editor.putLong("playback_position", positionMs);
+                    editor.putLong("last_position_update", System.currentTimeMillis());
+                }
+                
+                if (!track.isEmpty()) {
+                    editor.putString("broadcast_track", track);
+                }
+                
+                if (!path.isEmpty()) {
+                    editor.putString("broadcast_path", path);
+                }
+                
+                editor.putLong("last_broadcast_time", System.currentTimeMillis());
+                editor.apply();
             }
-            
-            extrasText.append("\n🎯 BEST POSITION GUESS:\n");
-            extrasText.append("Field: ").append(posField).append("\n");
-            extrasText.append("Value: ").append(position).append(" ms\n");
-            extrasText.append("Time: ").append(formatTime(position));
-            
-            updateDebugText(extrasText.toString());
-            
-            // Save to SharedPreferences
-            SharedPreferences prefs = context.getSharedPreferences("poweramp_data", Context.MODE_PRIVATE);
-            SharedPreferences.Editor editor = prefs.edit();
-            
-            if (position >= 0) {
-                editor.putLong("playback_position", position);
-                editor.putString("position_field", posField);
-                editor.putLong("position_timestamp", System.currentTimeMillis());
-            }
-            
-            String track = extras.getString("track", "");
-            if (!track.isEmpty()) {
-                editor.putString("broadcast_track", track);
-            }
-            
-            editor.putLong("last_broadcast_time", System.currentTimeMillis());
-            editor.putInt("broadcast_count", broadcastCount);
-            editor.apply();
-            
-            showToast("📻 Broadcast #" + broadcastCount + " - Pos: " + formatTime(position));
         }
     }
 
@@ -123,8 +91,9 @@ public class FloatingButtonService extends Service {
     public void onCreate() {
         super.onCreate();
         running = true;
+        Log.d(TAG, "🚀 Service created");
 
-        // Register receiver
+        // Register PowerAmp broadcast receiver DYNAMICALLY
         powerAmpReceiver = new PowerAmpBroadcastReceiver();
         IntentFilter filter = new IntentFilter();
         filter.addAction("com.maxmpz.audioplayer.STATUS_CHANGED");
@@ -136,39 +105,10 @@ public class FloatingButtonService extends Service {
         } else {
             registerReceiver(powerAmpReceiver, filter);
         }
+        Log.d(TAG, "✓ Registered PowerAmp broadcast receiver");
 
-        // Create floating view with debug info
-        LinearLayout container = new LinearLayout(this);
-        container.setOrientation(LinearLayout.VERTICAL);
-        container.setBackgroundColor(Color.parseColor("#CC000000"));
-        container.setPadding(16, 16, 16, 16);
-        
-        // Button
-        ImageButton btnTimestamp = new ImageButton(this);
-        btnTimestamp.setId(View.generateViewId());
-        btnTimestamp.setImageResource(android.R.drawable.ic_input_add);
-        btnTimestamp.setBackgroundColor(Color.parseColor("#FF6200EE"));
-        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(150, 150);
-        btnParams.gravity = Gravity.CENTER;
-        btnTimestamp.setLayoutParams(btnParams);
-        
-        // Debug text
-        debugTextView = new TextView(this);
-        debugTextView.setTextColor(Color.WHITE);
-        debugTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
-        debugTextView.setText("Waiting for PowerAmp...\n\nPlay music and watch this area!");
-        debugTextView.setPadding(8, 8, 8, 8);
-        LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        debugTextView.setLayoutParams(textParams);
-        debugTextView.setMaxLines(15);
-        
-        container.addView(btnTimestamp);
-        container.addView(debugTextView);
-        
-        floatingView = container;
+        floatingView = LayoutInflater.from(this).inflate(R.layout.floating_button, null);
+        ImageButton btnTimestamp = floatingView.findViewById(R.id.btnTimestamp);
         
         int layoutType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O 
             ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY 
@@ -184,13 +124,31 @@ public class FloatingButtonService extends Service {
 
         params.gravity = Gravity.TOP | Gravity.END;
         params.x = 20;
-        params.y = 100;
+        params.y = 300;
 
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         
         btnTimestamp.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                Log.d(TAG, "🖱️ Button clicked!");
+                
+                if (!isNotificationAccessGranted()) {
+                    Toast.makeText(FloatingButtonService.this, 
+                        "⚠️ Notification Access needed!\n\nOpening settings...", 
+                        Toast.LENGTH_LONG).show();
+                    
+                    new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            Intent intent = new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS");
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(intent);
+                        }
+                    }, 1500);
+                    return;
+                }
+                
                 saveTimestamp();
             }
         });
@@ -198,28 +156,11 @@ public class FloatingButtonService extends Service {
         windowManager.addView(floatingView, params);
         startForeground(1, createNotification());
         
-        showToast("🔍 VISUAL DEBUG MODE - Watch the black box!");
-        updateDebugText("Waiting for PowerAmp...\n\nBroadcasts received: 0\n\nPlay music in PowerAmp!");
-    }
-
-    private void updateDebugText(final String text) {
-        handler.post(new Runnable() {
-            @Override
-            public void run() {
-                if (debugTextView != null) {
-                    debugTextView.setText(text);
-                }
-            }
-        });
-    }
-
-    private void showToast(final String message) {
-        handler.post(new Runnable() {
-            @Override
-            public void run() {
-                Toast.makeText(FloatingButtonService.this, message, Toast.LENGTH_LONG).show();
-            }
-        });
+        if (!isNotificationAccessGranted()) {
+            Toast.makeText(this, "⚠️ Tap button to enable Notification Access", Toast.LENGTH_LONG).show();
+        } else {
+            Toast.makeText(this, "✓ Ready! Tap to save timestamps", Toast.LENGTH_SHORT).show();
+        }
     }
 
     private boolean isNotificationAccessGranted() {
@@ -235,8 +176,8 @@ public class FloatingButtonService extends Service {
         Intent intent = new Intent(this, MainActivity.class);
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE);
         return new NotificationCompat.Builder(this, "poweramp_timestamp_channel")
-                .setContentTitle("PowerAmp DEBUG")
-                .setContentText("Visual mode")
+                .setContentTitle("PowerAmp Timestamp")
+                .setContentText("Tap to save")
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentIntent(pendingIntent)
                 .build();
@@ -245,34 +186,46 @@ public class FloatingButtonService extends Service {
     private void saveTimestamp() {
         SharedPreferences prefs = getSharedPreferences("poweramp_data", Context.MODE_PRIVATE);
         
-        long position = prefs.getLong("playback_position", 0);
-        String posField = prefs.getString("position_field", "NONE");
-        int broadcasts = prefs.getInt("broadcast_count", 0);
-        
-        StringBuilder saveInfo = new StringBuilder();
-        saveInfo.append("💾 SAVING:\n\n");
-        saveInfo.append("Broadcasts received: ").append(broadcasts).append("\n");
-        saveInfo.append("Position field: ").append(posField).append("\n");
-        saveInfo.append("Position value: ").append(position).append(" ms\n");
-        saveInfo.append("Formatted: ").append(formatTime(position)).append("\n\n");
-        
-        updateDebugText(saveInfo.toString());
-        
-        // Get filename
+        // Get filename from notification listener (UNCHANGED - this was already working!)
         String title = prefs.getString("notification_title", "");
         String text = prefs.getString("notification_text", "");
-        String broadcastTrack = prefs.getString("broadcast_track", "");
+        String subText = prefs.getString("notification_subtext", "");
         
+        // Get playback position (now in milliseconds after conversion)
+        long position = prefs.getLong("playback_position", 0);
+        
+        Log.d(TAG, "📊 DEBUG INFO:");
+        Log.d(TAG, "  Title: " + title);
+        Log.d(TAG, "  Text: " + text);
+        Log.d(TAG, "  SubText: " + subText);
+        Log.d(TAG, "  Position: " + position + " ms");
+        
+        // Find filename (UNCHANGED - original logic)
         String found = "";
-        if (!title.isEmpty()) found = title;
-        else if (!text.isEmpty()) found = text;
-        else if (!broadcastTrack.isEmpty()) found = broadcastTrack;
-        else found = "unknown";
+        if (!title.isEmpty() && !title.startsWith("content://")) found = title;
+        else if (!text.isEmpty() && !text.startsWith("content://")) found = text;
+        else if (!subText.isEmpty() && !subText.startsWith("content://")) found = subText;
+        
+        if (found.isEmpty()) {
+            // Try broadcast track info as fallback
+            String broadcastTrack = prefs.getString("broadcast_track", "");
+            String broadcastPath = prefs.getString("broadcast_path", "");
+            
+            if (!broadcastTrack.isEmpty()) found = broadcastTrack;
+            else if (!broadcastPath.isEmpty()) found = broadcastPath;
+        }
+        
+        if (found.isEmpty()) {
+            Toast.makeText(this, "❌ No track detected", Toast.LENGTH_SHORT).show();
+            Log.e(TAG, "❌ No track found!");
+            return;
+        }
         
         currentFilename = cleanFilename(found);
         String timestamp = formatTime(position);
         
-        showToast("💾 Saving: " + timestamp + "\nFrom field: " + posField);
+        Log.d(TAG, "💾 Saving timestamp: " + timestamp + " to file: " + currentFilename + ".txt");
+        Toast.makeText(this, "💾 Saving: " + timestamp, Toast.LENGTH_SHORT).show();
         
         File dir = new File("/storage/emulated/0/_Edit-times");
         dir.mkdirs();
@@ -283,24 +236,23 @@ public class FloatingButtonService extends Service {
                 FileOutputStream fos = new FileOutputStream(file);
                 fos.write((currentFilename + "\n" + timestamp + "\n").getBytes());
                 fos.close();
+                Toast.makeText(this, "✅ Created file!", Toast.LENGTH_SHORT).show();
+                Log.d(TAG, "✅ Created new file: " + file.getAbsolutePath());
             } else {
                 FileOutputStream fos = new FileOutputStream(file, true);
                 fos.write((timestamp + "\n").getBytes());
                 fos.close();
+                Toast.makeText(this, "✅ Saved: " + timestamp, Toast.LENGTH_SHORT).show();
+                Log.d(TAG, "✅ Appended to file: " + file.getAbsolutePath());
             }
-            
-            saveInfo.append("✅ SAVED to:\n").append(file.getName());
-            updateDebugText(saveInfo.toString());
-            showToast("✅ Saved: " + timestamp);
         } catch (Exception e) {
-            saveInfo.append("❌ ERROR:\n").append(e.getMessage());
-            updateDebugText(saveInfo.toString());
-            showToast("❌ Error: " + e.getMessage());
+            Toast.makeText(this, "❌ Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            Log.e(TAG, "❌ Error saving file", e);
         }
     }
 
     private String cleanFilename(String filename) {
-        if (filename == null || filename.isEmpty()) return "unknown";
+        if (filename == null || filename.isEmpty()) return "";
         if (filename.contains("/")) filename = filename.substring(filename.lastIndexOf("/") + 1);
         if (filename.contains(".")) filename = filename.substring(0, filename.lastIndexOf("."));
         return filename.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
@@ -319,24 +271,28 @@ public class FloatingButtonService extends Service {
         super.onDestroy();
         running = false;
         
+        // Unregister the broadcast receiver
         if (powerAmpReceiver != null) {
             try {
                 unregisterReceiver(powerAmpReceiver);
-            } catch (Exception e) {}
+                Log.d(TAG, "✓ Unregistered PowerAmp receiver");
+            } catch (Exception e) {
+                Log.e(TAG, "Error unregistering receiver", e);
+            }
         }
         
         if (floatingView != null) {
             try { 
-                windowManager.removeView(floatingView);
-            } catch (Exception e) {}
+                windowManager.removeView(floatingView); 
+                Log.d(TAG, "✓ Removed floating view");
+            } catch (Exception e) {
+                Log.e(TAG, "Error removing view", e);
+            }
         }
-        
-        handler.removeCallbacksAndMessages(null);
     }
 
     @Override
     public IBinder onBind(Intent intent) {
         return null;
     }
-                                                   }
-        
+            }
