@@ -4,6 +4,7 @@ import android.app.Notification;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -38,6 +39,7 @@ public class FloatingButtonService extends Service {
     private Handler handler = new Handler(Looper.getMainLooper());
 
     private static final String POWERAMP_PACKAGE = "com.maxmpz.audioplayer";
+    private static final String POWERAMP_API_RECEIVER = "com.maxmpz.audioplayer.player.PowerampAPIReceiver";
     private static final String ACTION_API_COMMAND = POWERAMP_PACKAGE + ".API_COMMAND";
     private static final String ACTION_TRACK_POS_SYNC = POWERAMP_PACKAGE + ".TPOS_SYNC";
     private static final String EXTRA_COMMAND = "cmd";
@@ -197,8 +199,8 @@ public class FloatingButtonService extends Service {
         long requestTime = System.currentTimeMillis();
         Intent requestIntent = new Intent(ACTION_API_COMMAND);
         requestIntent.putExtra(EXTRA_COMMAND, COMMAND_POS_SYNC);
-        requestIntent.setPackage(POWERAMP_PACKAGE);
-        startService(requestIntent);
+        requestIntent.setComponent(new ComponentName(POWERAMP_PACKAGE, POWERAMP_API_RECEIVER));
+        sendBroadcast(requestIntent);
         Log.d(TAG, "📡 Requested position sync");
         
         // Wait for update with timeout
@@ -332,4 +334,4 @@ public class FloatingButtonService extends Service {
     public IBinder onBind(Intent intent) {
         return null;
     }
-}
+                    }
