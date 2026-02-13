@@ -37,6 +37,12 @@ public class FloatingButtonService extends Service {
     private PowerAmpBroadcastReceiver powerAmpReceiver;
     private Handler handler = new Handler(Looper.getMainLooper());
 
+    private static final String POWERAMP_PACKAGE = "com.maxmpz.audioplayer";
+    private static final String ACTION_API_COMMAND = POWERAMP_PACKAGE + ".API_COMMAND";
+    private static final String ACTION_TRACK_POS_SYNC = POWERAMP_PACKAGE + ".TPOS_SYNC";
+    private static final String EXTRA_COMMAND = "cmd";
+    private static final int COMMAND_POS_SYNC = 16;
+
     public static boolean isRunning() {
         return running;
     }
@@ -99,6 +105,7 @@ public class FloatingButtonService extends Service {
         filter.addAction("com.maxmpz.audioplayer.STATUS_CHANGED");
         filter.addAction("com.maxmpz.audioplayer.PLAYING_MODE_CHANGED");
         filter.addAction("com.maxmpz.audioplayer.TRACK_CHANGED");
+        filter.addAction(ACTION_TRACK_POS_SYNC);
         
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(powerAmpReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
@@ -186,12 +193,42 @@ public class FloatingButtonService extends Service {
     private void saveTimestamp() {
         SharedPreferences prefs = getSharedPreferences("poweramp_data", Context.MODE_PRIVATE);
         
-        // Get filename from notification listener (UNCHANGED - this was already working!)
+        // Request fresh position
+        long requestTime = System.currentTimeMillis();
+        Intent requestIntent = new Intent(ACTION_API_COMMAND);
+        requestIntent.putExtra(EXTRA_COMMAND, COMMAND_POS_SYNC);
+        requestIntent.setPackage(POWERAMP_PACKAGE);
+        startService(requestIntent);
+        Log.d(TAG, "📡 Requested position sync");
+        
+        // Wait for update with timeout
+        long timeout = requestTime + 2000; // 2 seconds max wait
+        boolean updated = false;
+        while (System.currentTimeMillis() < timeout) {
+            long lastUpdate = prefs.getLong("last_position_update", 0);
+            if (lastUpdate > requestTime) {
+                updated = true;
+                Log.d(TAG, "✓ Position updated after request");
+                break;
+            }
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        
+        if (!updated) {
+            Toast.makeText(this, "⚠️ Position update timed out", Toast.LENGTH_SHORT).show();
+            Log.e(TAG, "❌ Position sync timeout");
+            return;
+        }
+        
+        // Proceed with the rest (get title, text, etc.)
         String title = prefs.getString("notification_title", "");
         String text = prefs.getString("notification_text", "");
         String subText = prefs.getString("notification_subtext", "");
         
-        // Get playback position (now in milliseconds after conversion)
         long position = prefs.getLong("playback_position", 0);
         
         Log.d(TAG, "📊 DEBUG INFO:");
@@ -295,4 +332,4 @@ public class FloatingButtonService extends Service {
     public IBinder onBind(Intent intent) {
         return null;
     }
-            }
+}
